@@ -11,8 +11,6 @@
 
 #define MAX_LINE_LENGTH 1024
 static void handle_client(int fd);
-static void noopResponse(int fd);
-static void openAndReadFile();
 
 int main(int argc, char *argv[]) {
   

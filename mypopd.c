@@ -12,7 +12,20 @@
 #define MAX_LINE_LENGTH 1024
 static void handle_client(int fd);
 static void noopResponse(int fd);
-
+static int quitResponse(int fd,const char*);
+// Things to consider further down the line
+// what to send if send_string returns -1 
+// Case where no user provided or pw: Can I just rid of the crlf? 
+// What impact does this have on where we are reading in data for an email
+// RIGHT NOW I JUST reset the life to ignore crlf. 
+// The Case where:
+// User logins -> invalid user
+// Password provided -> user is still invalid
+// What should the error message be?
+// CASE:
+// USER: OK 
+// USER: Err
+// PASS: Should this work??  
 int main(int argc, char *argv[]) {
   
   if (argc != 2) {
@@ -25,8 +38,11 @@ int main(int argc, char *argv[]) {
   return 0;
 }
 
-void print_hex(const char *s)
-{
+void print_hex(const char *s) {
+if (s == NULL){
+	printf("str is empty, return\n");
+	return;
+}
   while(*s) {
     printf("%02x", (unsigned int) *s++);
 }
@@ -40,59 +56,110 @@ void handle_client(int fd) {
 	// lets send hello message to the client 
 
 	const char *welecomeMessage = "+OK POP3 server ready";
-	const char *nope = "NOOP\n";
-	const char *quit = "QUIT\n";
+	const char *nope = "NOOP";
+	const char *quit = "QUIT";
 	const char *quitMessage = "";
-	const char *user;
-	const char *pw;
+	int AuthortativeState = 0;
+	int isTransactionState = 0;
+	char *tempUser;
+
+	// todo get maximum user size
+	char user[100];
+	memset(user, '\0', sizeof(user));
+
+	char *pw;
 	// send initial welcome message
-	if (send_string(fd,welecomeMessage) == -1) {
+	if (send_string(fd,"%s",welecomeMessage) == -1) {
 		printf("Hit an Error. TODO. Quit?");
 	}
+	// Successfully sent first message
+	AuthortativeState = 1;
 	char buffer[MAX_LINE_LENGTH];
 
 	// now wait for a response 
 	while (1) {
-		printf("print the current buffer");
 		if (nb_read_line(bufferReceievePointer,buffer) == -1) {
 			printf("Hit an Error. TODO. Quit?");
-			break;
+			return;
 		}
+		printf("print the current buffer\n");
 		printf("%s",buffer);
+
 		// check to see if space in buffer 
-		printf("result from the strcomp %d", strchr(buffer, ' '));
-		if (strchr(buffer, ' ') != -1) {
-			printf("message contains a space\n");
-			char *token;
-			// get the first token
-			token = strtok(buffer, ' ');
-			printf("got first part of message %s\n",token);
-			if (strcasecmp("USER",token)) {
-				printf("first part of message is USER\n");
-				// get 2nd token which should be usernme
-				// and save it 
-				user = strtok(NULL, " ");
-				printf("got second part of message %s",user);
-				const char *str = "+OK %s is a valid mailbox";
-				if (strcasecmp(user, "")) {
-					str = "-ERR Need User Name passed as parameter";
-				} else if (is_valid_user(user, NULL)) {
-					printf("Not a valid user\n");
-					str = "-ERR never heard of mailbox %s";
+		char *token;
+		const char s[2] = " ";
+		// remove crlf TODO: THIS MIGHT CAUSE TROUBLE 
+		// READING IN EMAIL; use as a placeholder for now
+		buffer[strcspn(buffer, "\r\n")] = '\0';
+		token = strtok(buffer,s);
+		if (token == NULL) {
+			// need to send error 
+			printf("Is NULL\n");
+		}
+		if ((strcasecmp("USER",token) == 0) && AuthortativeState) {
+			printf("first part of message is USER\n");
+			// get 2nd token which should be usernme
+			// and save it 
+			tempUser = strtok(NULL, s);
+			char *str = "+OK %s is a valid mailbox";
+			if (tempUser == NULL) {
+				str = "-ERR Need Username passed as parameter%s";
+			} else if (!is_valid_user(tempUser, NULL)) {
+				printf("Not a valid user\n");
+				printf("************\n");
+				printf("************\n");
+				str = "-ERR never heard of mailbox %s";
+			} else {
+				strcpy(user,tempUser);
+			}
+			printf("user is %s\n",tempUser);
+			if (send_string(fd, str, tempUser) == -1){
+				printf("Hit an Error. TODO. Quit?");
+				return;
+			}
+		} else if ((strcasecmp("PASS",token) == 0) && AuthortativeState){
+			const char *Resp = "+OK %s's maildrop has %d messages (%d octets)";
+			pw = strtok(NULL, s);
+			if (!strcasecmp(user,"")) {
+				printf("USER is NULL");
+				Resp = "-ERR No USER provided before PASS command.";
+			} else if (!pw) {
+				Resp = "-ERR Need password passed as a parameter";
+				if (send_string(fd,"%s",Resp)){
+					return;
 				}
-				if (send_string(fd, str, user) == -1){
-					printf("Hit an Error. TODO. Quit?");
+			} else if (!is_valid_user(user, pw)) {
+				Resp = "-ERR incorrect password %s";
+				// reset pw for next iteration
+				if (send_string(fd,Resp,pw) == -1){
+					return;
+				}
+				pw = NULL;
+			} else {
+				mail_list_t mailList = load_user_mail(user);
+				int numMsgs = get_mail_count(mailList);
+				isTransactionState = 1;
+				int sizeMsgs = get_mail_list_size(mailList);
+				if (send_string(fd, Resp, user,numMsgs,sizeMsgs) == -1){
+					printf("Hit an sending the message. TODO. Quit?");
+					return;
 				}
 			}
-		} 
-		if (!strcasecmp(nope, buffer)) {
+		} else if (!strcasecmp(nope, buffer)) {
 			printf("is a NOOP message\n");
 			noopResponse(fd);
 		} else if (!strcasecmp(quit, buffer)) {
+			printf("is a Quit Message\n");
 			if (quitResponse(fd, user)) {
 				printf("Closing the connection");
 				break;
 			}
+		} else {
+			if (send_string(fd, "%s", "-ERR command not recognized") == -1) {
+				printf("Hit an sending a message Error. TODO. Quit?\n");
+				return;
+			}
+
 		}
 		printf("now entering another iteration of a loop\n");
 		memset(buffer, 0, sizeof(buffer));
@@ -114,15 +181,10 @@ void noopResponse(int fd){
 int quitResponse(int fd, const char* user) {
 	// use a generic message right 
 	// TODO: cal size of msg + max user name size 
-	char bufferExitMessage[1024];
-	printf("entering quit function\n");
-	int chars = sprintf(bufferExitMessage,"+OK %s POP3 server signing off", user);
-	if (chars > 1024) {
-		printf("****Memory Error****\n");
-	}
-	if (send_string(fd, bufferExitMessage) == -1) {
+	if (send_string(fd, "+OK %s POP3 server signing off", user) == -1) {
 		printf("Hit an Error. TODO. Quit?");
 		return 0;
 	}
 	return 1; 
 }
+
