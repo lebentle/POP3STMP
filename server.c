@@ -154,6 +154,7 @@ void run_server(const char *port, void (*handler)(int)) {
 	      s, sizeof(s));
     printf("server: got connection from %s\n", s);
     
+    
     // Create a new process to handle the new client; parent process
     // will wait for another client.
     if (!fork()) {

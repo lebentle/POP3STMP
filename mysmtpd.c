@@ -6,11 +6,13 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <sys/utsname.h>
+#include <sys/socket.h>
 #include <ctype.h>
 
 #define MAX_LINE_LENGTH 1024
-
 static void handle_client(int fd);
+static void noopResponse(int fd);
+static void openAndReadFile();
 
 int main(int argc, char *argv[]) {
   
@@ -24,7 +26,6 @@ int main(int argc, char *argv[]) {
   return 0;
 }
 
+
 void handle_client(int fd) {
-  
-  // TODO To be implemented
 }
