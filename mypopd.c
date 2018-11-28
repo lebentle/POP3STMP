@@ -58,13 +58,14 @@ void handle_client(int fd) {
 	const char *welecomeMessage = "+OK POP3 server ready";
 	const char *nope = "NOOP";
 	const char *quit = "QUIT";
+	const char *stat = "STAT";
 	const char *quitMessage = "";
 	int AuthortativeState = 0;
-	int isTransactionState = 0;
+	int TransactionState = 0;
 	char *tempUser;
 
 	// todo get maximum user size
-	char user[100];
+	char user[MAX_PASSWORD_SIZE];
 	memset(user, '\0', sizeof(user));
 
 	char *pw;
@@ -105,10 +106,8 @@ void handle_client(int fd) {
 			if (tempUser == NULL) {
 				str = "-ERR Need Username passed as parameter%s";
 			} else if (!is_valid_user(tempUser, NULL)) {
-				printf("Not a valid user\n");
-				printf("************\n");
-				printf("************\n");
 				str = "-ERR never heard of mailbox %s";
+				strcpy(user,tempUser);
 			} else {
 				strcpy(user,tempUser);
 			}
@@ -138,18 +137,19 @@ void handle_client(int fd) {
 			} else {
 				mail_list_t mailList = load_user_mail(user);
 				int numMsgs = get_mail_count(mailList);
-				isTransactionState = 1;
+				TransactionState = 1;
+				AuthortativeState = 0;
 				int sizeMsgs = get_mail_list_size(mailList);
 				if (send_string(fd, Resp, user,numMsgs,sizeMsgs) == -1){
-					printf("Hit an sending the message. TODO. Quit?");
 					return;
 				}
 			}
-		} else if (!strcasecmp(nope, buffer)) {
-			printf("is a NOOP message\n");
+		} else if (strcasecmp() &&TransactionState) 
+
+
+		else if (strcasecmp(nope, buffer) == 0) {
 			noopResponse(fd);
 		} else if (!strcasecmp(quit, buffer)) {
-			printf("is a Quit Message\n");
 			if (quitResponse(fd, user)) {
 				printf("Closing the connection");
 				break;
