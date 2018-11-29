@@ -20,7 +20,7 @@ static int sendTerminator(int fd);
 static int handleDelete(int fd, char * itemToDele, mail_list_t list);
 static int handleReturn(int fd, char * itemToReturn,char *userName, mail_list_t list);
 static int openAndReadFile(int fd, const char * mailName, const char * username, size_t size);
-static int handleQuitTrans(int fd, const char* user, size_t listsize,mail_list_t list);
+static int handleQuitTrans(int fd, const char* user, int listsize,mail_list_t list);
 // Things to consider further down the line
 // what to send if send_string returns -1 
 // Case where no user provided or pw: Can I just rid of the crlf? 
@@ -217,7 +217,7 @@ void handle_client(int fd) {
 				return;
 			}
 	 	} else if ((strcasecmp(quit, buffer) == 0) && TransactionState) {
-	 		if (!handleQuitTrans(fd,user,get_mail_list_size(mailList),mailList)){
+	 		if (!handleQuitTrans(fd,user,get_mail_count(mailList),mailList)){
 	 			reset_mail_list_deleted_flag(mailList);
 	 			return;
 	 		} else {
@@ -279,10 +279,10 @@ int quitResponse(int fd, const char* user) {
 	return 1; 
 }
 
-int handleQuitTrans(int fd, const char* user,size_t listsize,mail_list_t list){
+int handleQuitTrans(int fd, const char* user,int listsize,mail_list_t list){
 	// use a generic message right 
 	// TODO: cal size of msg + max user name size 
-	if (send_string(fd, "+OK %s POP3 server signing off (%zu left in maildrop)\r\n", user,listsize) == -1) {
+	if (send_string(fd, "+OK %s POP3 server signing off (%d left in maildrop)\r\n", user,listsize) == -1) {
 		return 0;
 	}
 	return 1; 
@@ -377,13 +377,11 @@ int sendTerminator(int fd){
 
 
 int openAndReadFile(int fd, const char * mailName, const char * username, size_t size) {
-	printf("&&&&&&&\n");
 	char filename[NAME_MAX + 1];
   	sprintf(filename, "%s", mailName);
   	printf("%s\n",filename);
 	FILE *file = fopen(filename,"r+");
 	if (!file) {
-		printf("was not able to open file\n");
 		return 0;
 	}
 	char buf[1024];
@@ -404,7 +402,6 @@ int openAndReadFile(int fd, const char * mailName, const char * username, size_t
 		return 0;
 	}
 	if (fclose(file)) {
-		printf("Error closing file");
 		return 0;
 	}
 	return 1;
