@@ -20,6 +20,7 @@ static int sendTerminator(int fd);
 static int handleDelete(int fd, char * itemToDele, mail_list_t list);
 static int handleReturn(int fd, char * itemToReturn,char *userName, mail_list_t list);
 static int openAndReadFile(int fd, const char * mailName, const char * username, size_t size);
+static int handleQuitTrans(int fd, const char* user, size_t listsize,mail_list_t list);
 // Things to consider further down the line
 // what to send if send_string returns -1 
 // Case where no user provided or pw: Can I just rid of the crlf? 
@@ -65,14 +66,15 @@ void handle_client(int fd) {
 	net_buffer_t bufferReceievePointer = nb_create(fd,512);
 	// lets send hello message to the client 
 
-	const char *welecomeMessage = "+OK POP3 server ready";
+	const char *welecomeMessage = "+OK POP3 server ready <%s>\r\n";
 	const char *nope = "NOOP";
 	const char *quit = "QUIT";
 	const char *stat = "STAT";
 	const char *list = "LIST";
 	const char *dele = "DELE";
 	const char *retr = "RETR";
-	const char *quitMessage = "";
+	const char *rset = "RSET";
+	const char *pass = "PASS";
 	int AuthortativeState = 0;
 	int TransactionState = 0;
 	// intialize this here
@@ -85,9 +87,11 @@ void handle_client(int fd) {
 	memset(user, '\0', sizeof(user));
 
 	char *pw;
+	struct utsname uname_pointer;
+  	uname(&uname_pointer);
 	// send initial welcome message
-	if (send_string(fd,"%s",welecomeMessage) == -1) {
-		printf("Hit an Error. TODO. Quit?");
+	if (send_string(fd,welecomeMessage,uname_pointer.nodename) == -1) {
+		return;
 	}
 	// Successfully sent first message
 	AuthortativeState = 1;
@@ -108,6 +112,7 @@ void handle_client(int fd) {
 		// Sending out an email; use as a placeholder for now
 		buffer[strcspn(buffer, "\r\n")] = '\0';
 		token = strtok(buffer,s);
+		printf("%s\n", token);
 
 		// USER message
 		if ((strcasecmp("USER",token) == 0) && AuthortativeState) {
@@ -116,34 +121,31 @@ void handle_client(int fd) {
 			// if it is a valid user 
 			// If invalid user; set user var to NULL  
 			tempUser = strtok(NULL, s);
-			char *str = "+OK %s is a valid mailbox";
+			char *str = "+OK %s is a valid mailbox\r\n";
 			if (tempUser == NULL) {
-				str = "-ERR Need Username passed as parameter%s";
+				str = "-ERR Need Username passed as parameter%s\r\n";
 			} else if (!is_valid_user(tempUser, NULL)) {
-				str = "-ERR never heard of mailbox %s";
+				str = "-ERR never heard of mailbox %s\r\n";
 				strcpy(user,tempUser);
 			} else {
 				strcpy(user,tempUser);
 			}
-			printf("user is %s\n",tempUser);
 			if (send_string(fd, str, tempUser) == -1){
-				printf("Hit an Error. TODO. Quit?");
 				return;
 			}
 		// PASS case 
-		} else if ((strcasecmp("PASS",token) == 0) && AuthortativeState){
-			const char *Resp = "+OK %s's maildrop has %d messages (%d octets)";
+		} else if ((strcasecmp(pass,token) == 0) && AuthortativeState){
+			const char *Resp = "+OK %s's maildrop has %d messages (%zu octets)\r\n";
 			pw = strtok(NULL, s);
-			if (!strcasecmp(user,"")) {
-				printf("USER is NULL");
-				Resp = "-ERR No USER provided before PASS command.";
+			if (strcasecmp(user,"") == 0) {
+				Resp = "-ERR No USER provided before PASS command.\r\n";
 			} else if (!pw) {
-				Resp = "-ERR Need password passed as a parameter";
+				Resp = "-ERR Need password passed as a parameter\r\n";
 				if (send_string(fd,"%s",Resp)){
 					return;
 				}
 			} else if (!is_valid_user(user, pw)) {
-				Resp = "-ERR incorrect password %s";
+				Resp = "-ERR incorrect password %s\r\n";
 				// reset pw for next iteration
 				if (send_string(fd,Resp,pw) == -1){
 					return;
@@ -163,9 +165,15 @@ void handle_client(int fd) {
 		} else if ((strcasecmp(stat, token) == 0) && TransactionState) {
 				// since in transacationState we know the mailList has been
 				// loaded in
+				char *listSTAT = strtok(NULL, s);
+				if (listSTAT != NULL) {
+					if (send_string(fd,"+ERR No arguments should be given with STAT\r\n") == -1){
+						return;
+				}
+			}
 				int numMsgs = get_mail_count(mailList);
 				size_t sizeMsgs = get_mail_list_size(mailList);
-				if (send_string(fd,"+Ok %d %zu",numMsgs,sizeMsgs) == -1){
+				if (send_string(fd,"+Ok %d %zu\r\n",numMsgs,sizeMsgs) == -1){
 					return;
 				}
 			}
@@ -186,7 +194,7 @@ void handle_client(int fd) {
 			mail_item_t mailItem = get_mail_item(mailList,atoi(listArg) - 1);
 			if (mailItem) {
 				size_t msgSizeBytes = get_mail_item_size(mailItem);
-				if (send_string(fd,"+Ok %d %zu \r\n",numMsgs,msgSizeBytes) == -1){
+				if (send_string(fd,"+Ok %d %zu \r\n",atoi(listArg),msgSizeBytes) == -1){
 					return;
 				}
 			} else  {
@@ -201,21 +209,45 @@ void handle_client(int fd) {
 			if (!handleDelete(fd,deleArg, mailList)){
 				return;
 			}
+		// RETR CASE
 		} else if (strcasecmp(retr, token) == 0 && TransactionState){
-			printf("********");
 			char *retnArg = strtok(NULL, s);
 			if (!handleReturn(fd,retnArg, user, mailList)){
 				return;
 			}
-	 	} else if (strcasecmp(nope, token) == 0 && TransactionState) {
+	 	} else if ((strcasecmp(quit, buffer) == 0) && TransactionState) {
+	 		if (!handleQuitTrans(fd,user,get_mail_list_size(mailList),mailList)){
+	 			reset_mail_list_deleted_flag(mailList);
+	 			return;
+	 		} else {
+	 			destroy_mail_list(mailList);
+	 			printf("close connection\n");
+	 			return;
+	 		}
+	 	// RSET CASE
+	 	} else if ((strcasecmp(rset, token) == 0) && TransactionState){
+	 		char *argRSET = strtok(NULL, s);
+	 		if (argRSET != NULL) {
+				if (send_string(fd,"+ERR No arguments should be given with RSET\r\n")){
+					return;
+				}
+			} else {
+				reset_mail_list_deleted_flag(mailList);
+				int mailListCount = get_mail_count(mailList);
+				size_t mailSize = get_mail_list_size(mailList);
+				if (send_string(fd,"+OK maildrop has %d (%zu octets)\r\n",mailListCount, mailSize) == -1){
+					return;
+				}
+			}
+		} else if (strcasecmp(nope, token) == 0 && TransactionState) {
 			noopResponse(fd);
-		} else if (!strcasecmp(quit, buffer)) {
+		} else if (!strcasecmp(quit, buffer) && AuthortativeState) {
 			if (quitResponse(fd, user)) {
 				printf("Closing the connection");
 				break;
 			}
 		} else {
-			if (send_string(fd, "%s", "-ERR command not recognized") == -1) {
+			if (send_string(fd, "%s", "-ERR command not recognized\r\n") == -1) {
 				return;
 			}
 		}
@@ -225,6 +257,7 @@ void handle_client(int fd) {
 	printf("about to return\n");
 	return;
 }
+
 
 // NOOP command functionality
 int noopResponse(int fd){
@@ -238,7 +271,16 @@ int noopResponse(int fd){
 int quitResponse(int fd, const char* user) {
 	// use a generic message right 
 	// TODO: cal size of msg + max user name size 
-	if (send_string(fd, "+OK %s POP3 server signing off", user) == -1) {
+	if (send_string(fd, "+OK %s POP3 server signing off\r\n", user) == -1) {
+		return 0;
+	}
+	return 1; 
+}
+
+int handleQuitTrans(int fd, const char* user,size_t listsize,mail_list_t list){
+	// use a generic message right 
+	// TODO: cal size of msg + max user name size 
+	if (send_string(fd, "+OK %s POP3 server signing off (%zu left in maildrop)\r\n", user,listsize) == -1) {
 		return 0;
 	}
 	return 1; 
@@ -298,20 +340,21 @@ int handleReturn(int fd, char *itemToReturn, char *userName, mail_list_t list) {
 	    }
 	} else {
 		itemRERN = strtoul(itemToReturn, NULL,10);
+		printf("%u\n",itemRERN);
 		if (itemRERN == 0) {
-			Resp = "-ERR no such message";
+			Resp = "-ERR no such message\r\n";
 			if (send_string(fd, "%s",Resp) == -1){
 				return 0;
 			}
 		}
 		mail_item_t itemToReturned = get_mail_item(list,itemRERN - 1);
 		if (!itemToReturned){
-			Resp = "-ERR no such message";
+			Resp = "-ERR no such message\r\n";
 			if (send_string(fd, "%s",Resp) == -1){
 				return 0;
 			}
 		} else {
-			Resp = "+OK %s octets";
+			Resp = "+OK %zu octets\r\n";
 			if (send_string(fd, Resp, get_mail_item_size(itemToReturned)) == -1){
 				return 0;
 			}
@@ -331,29 +374,32 @@ int sendTerminator(int fd){
 }
 
 
-int static openAndReadFile(int fd, const char * mailName, const char * username, size_t size) {
-
+int openAndReadFile(int fd, const char * mailName, const char * username, size_t size) {
+	printf("&&&&&&&\n");
 	char filename[NAME_MAX + 1];
-  	sprintf(filename, MAIL_BASE_DIRECTORY "/%s/%s", username,mailName);
-
+  	sprintf(filename, "%s", mailName);
+  	printf("%s\n",filename);
 	FILE *file = fopen(filename,"r+");
 	if (!file) {
-		printf("was not able to open file");
+		printf("was not able to open file\n");
 		return 0;
 	}
-	char buff[MAX_LINE_LENGTH];
-	memset(buff, '\0', sizeof(buff));
+	char buf[1024];
+	size_t nread;
+	memset(buf, '\0', sizeof(buf));
 	// read intho the buff 
-	while (fgets(buff, MAX_LINE_LENGTH - 3, file) != NULL){
-		buff[1021] = '\r';
-		buff[1022] = '\n';
-		buff[1023] = '\0';
-		printf("The buffer looks like this %s", buff);
-		if (send_all(fd, buff,1024) == -1) {
+	while ((nread = fread(buf, 1, sizeof buf, file)) > 0){
+		if (send_all(fd, buf,nread) == -1) {
 			return 0;
 		}
-		memset(buff, '\0', sizeof(buff));
-
+		memset(buf, '\0', sizeof(buf));
+	}
+	// termiante here 
+	if (send_string(fd, "%s","\r\n") == -1){
+		return 0;
+	} 
+	if (!sendTerminator(fd)){
+		return 0;
 	}
 	if (fclose(file)) {
 		printf("Error closing file");
@@ -361,16 +407,5 @@ int static openAndReadFile(int fd, const char * mailName, const char * username,
 	}
 	return 1;
 }
-/*
-// NO; just need to read in one message 
-int readAllMessagesToClient(int fd, int numberOfMessages, mail_list_t list) {
-	char buffer[MAX_LINE_LENGTH];
-	for (int i = 0; i < numberOfMessages; i++) {
-		// how_much_to_read_in 
-		printf("reading in message");
-		readInMessage = get_mail_item(list,i);
-
-	}
-}
-*/ 
+ 
 
