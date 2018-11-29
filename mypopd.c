@@ -8,19 +8,24 @@
 #include <sys/utsname.h>
 #include <sys/socket.h>
 #include <ctype.h>
+#include <limits.h>
 
+#define MAIL_BASE_DIRECTORY "mail.store"
 #define MAX_LINE_LENGTH 1024
 static void handle_client(int fd);
 static int noopResponse(int fd);
 static int quitResponse(int fd,const char*);
 static int sendAllMessageNumAndSize(int fd, int numberOfMessages,size_t totalSize,mail_list_t list);
 static int sendTerminator(int fd);
+static int handleDelete(int fd, char * itemToDele, mail_list_t list);
+static int handleReturn(int fd, char * itemToReturn,char *userName, mail_list_t list);
+static int openAndReadFile(int fd, const char * mailName, const char * username, size_t size);
 // Things to consider further down the line
 // what to send if send_string returns -1 
 // Case where no user provided or pw: Can I just rid of the crlf? 
 // What impact does this have on where we are reading in data for an email
 // RIGHT NOW I JUST reset the life to ignore crlf. 
-// The Case where:
+// The Case where:©
 // User logins -> invalid user
 // Password provided -> user is still invalid
 // What should the error message be?
@@ -65,10 +70,12 @@ void handle_client(int fd) {
 	const char *quit = "QUIT";
 	const char *stat = "STAT";
 	const char *list = "LIST";
+	const char *dele = "DELE";
+	const char *retr = "RETR";
 	const char *quitMessage = "";
 	int AuthortativeState = 0;
 	int TransactionState = 0;
-	// allocate this here
+	// intialize this here
 	mail_list_t mailList;
 
 	char *tempUser;
@@ -84,7 +91,7 @@ void handle_client(int fd) {
 	}
 	// Successfully sent first message
 	AuthortativeState = 1;
-	char buffer[MAX_LINE_LENGTH];
+	char buffer[512];
 
 	// now wait for a response 
 	while (1) {
@@ -174,9 +181,9 @@ void handle_client(int fd) {
 				if (!sendAllMessageNumAndSize(fd, numMsgs,sizeMsgs,mailList)){
 					return;
 				}
-			}
+			} else {
 			// Also, need to consider the delete case
-			mail_item_t mailItem = get_mail_item(mailList,(unsigned int) listArg - '0');
+			mail_item_t mailItem = get_mail_item(mailList,atoi(listArg) - 1);
 			if (mailItem) {
 				size_t msgSizeBytes = get_mail_item_size(mailItem);
 				if (send_string(fd,"+Ok %d %zu \r\n",numMsgs,msgSizeBytes) == -1){
@@ -187,7 +194,20 @@ void handle_client(int fd) {
 					return;
 				}
 			}
-		} else if (strcasecmp(nope, token) == 0) {
+		}
+		// DELETE CASE
+		} else if (strcasecmp(dele, token) == 0 && TransactionState) {
+			char *deleArg = strtok(NULL, s);
+			if (!handleDelete(fd,deleArg, mailList)){
+				return;
+			}
+		} else if (strcasecmp(retr, token) == 0 && TransactionState){
+			printf("********");
+			char *retnArg = strtok(NULL, s);
+			if (!handleReturn(fd,retnArg, user, mailList)){
+				return;
+			}
+	 	} else if (strcasecmp(nope, token) == 0 && TransactionState) {
 			noopResponse(fd);
 		} else if (!strcasecmp(quit, buffer)) {
 			if (quitResponse(fd, user)) {
@@ -225,19 +245,80 @@ int quitResponse(int fd, const char* user) {
 }
 
 int sendAllMessageNumAndSize(int fd, int numberOfMessages, size_t totalSize, mail_list_t list) {
-	if (send_string(fd, "+OK %d messages (%zu octets)",numberOfMessages,totalSize) == -1) {
+	if (send_string(fd, "+OK %d messages (%zu octets)\r\n",numberOfMessages,totalSize) == -1) {
 		return 0;
 	}
 	for (int i = 0; i < numberOfMessages; i++) {
 		mail_item_t mailItem = get_mail_item(list,i);
 		if (mailItem) {
 			size_t msgSizeBytes = get_mail_item_size(mailItem);
-			if (send_string(fd,"%d %zu",i, msgSizeBytes) == -1)
+			if (send_string(fd,"%d %zu\r\n",i + 1, msgSizeBytes) == -1)
 				return 0;
 		}
 	}
 	if (!sendTerminator(fd)){
 		return 0;
+	}
+	return 1;
+}
+
+int handleDelete(int fd, char * itemToDele, mail_list_t list){
+	const char * Resp;
+	unsigned int itemDELNUM;
+
+	if (!itemToDele){
+	    if (send_string(fd, "%s", "-ERR no arugment provided with DELE\r\n") == -1) {
+	    	return 0;
+	    }
+	} else {
+		itemDELNUM = strtoul(itemToDele, NULL,10);
+		if (itemDELNUM == 0) {
+			Resp = "-ERR %zu is not a valid input deleted\r\n";
+		}
+		mail_item_t itemDel = get_mail_item(list,itemDELNUM - 1);
+		if (!itemDel){
+			Resp = "-ERR %zu already deleted\r\n";
+	    } else {
+	    	mark_mail_item_deleted(itemDel);
+	    	Resp = "+OK %zu deleted\r\n";
+	    }
+	    if (send_string(fd, Resp, itemDELNUM) == -1){
+	    	return 0;
+	    }
+	}
+	return 1;
+}
+
+int handleReturn(int fd, char *itemToReturn, char *userName, mail_list_t list) {
+	const char * Resp;
+	unsigned int itemRERN;
+	if (!itemToReturn){
+	    if (send_string(fd, "%s", "-ERR no arugment provided with RETN\r\n") == -1) {
+	    	return 0;
+	    }
+	} else {
+		itemRERN = strtoul(itemToReturn, NULL,10);
+		if (itemRERN == 0) {
+			Resp = "-ERR no such message";
+			if (send_string(fd, "%s",Resp) == -1){
+				return 0;
+			}
+		}
+		mail_item_t itemToReturned = get_mail_item(list,itemRERN - 1);
+		if (!itemToReturned){
+			Resp = "-ERR no such message";
+			if (send_string(fd, "%s",Resp) == -1){
+				return 0;
+			}
+		} else {
+			Resp = "+OK %s octets";
+			if (send_string(fd, Resp, get_mail_item_size(itemToReturned)) == -1){
+				return 0;
+			}
+			if (!openAndReadFile(fd, get_mail_item_filename(itemToReturned), userName,get_mail_item_size(itemToReturned))){
+				return 0;
+			}
+		}
 	}
 	return 1;
 }
@@ -249,6 +330,37 @@ int sendTerminator(int fd){
 	return 1;
 }
 
+
+int static openAndReadFile(int fd, const char * mailName, const char * username, size_t size) {
+
+	char filename[NAME_MAX + 1];
+  	sprintf(filename, MAIL_BASE_DIRECTORY "/%s/%s", username,mailName);
+
+	FILE *file = fopen(filename,"r+");
+	if (!file) {
+		printf("was not able to open file");
+		return 0;
+	}
+	char buff[MAX_LINE_LENGTH];
+	memset(buff, '\0', sizeof(buff));
+	// read intho the buff 
+	while (fgets(buff, MAX_LINE_LENGTH - 3, file) != NULL){
+		buff[1021] = '\r';
+		buff[1022] = '\n';
+		buff[1023] = '\0';
+		printf("The buffer looks like this %s", buff);
+		if (send_all(fd, buff,1024) == -1) {
+			return 0;
+		}
+		memset(buff, '\0', sizeof(buff));
+
+	}
+	if (fclose(file)) {
+		printf("Error closing file");
+		return 0;
+	}
+	return 1;
+}
 /*
 // NO; just need to read in one message 
 int readAllMessagesToClient(int fd, int numberOfMessages, mail_list_t list) {
