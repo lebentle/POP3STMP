@@ -138,7 +138,7 @@ void handle_client(int fd) {
 			const char *Resp = "+OK %s's maildrop has %d messages (%zu octets)\r\n";
 			pw = strtok(NULL, s);
 			if (strcasecmp(user,"") == 0) {
-				Resp = "-ERR No USER provided before PASS command.\r\n";
+				Resp = "-ERR No USER provided before PASS command\r\n";
 			} else if (!pw) {
 				Resp = "-ERR Need password passed as a parameter\r\n";
 				if (send_string(fd,"%s",Resp)){
@@ -170,13 +170,14 @@ void handle_client(int fd) {
 					if (send_string(fd,"+ERR No arguments should be given with STAT\r\n") == -1){
 						return;
 				}
-			}
+			} else {
 				int numMsgs = get_mail_count(mailList);
 				size_t sizeMsgs = get_mail_list_size(mailList);
 				if (send_string(fd,"+Ok %d %zu\r\n",numMsgs,sizeMsgs) == -1){
 					return;
 				}
 			}
+		}
 		// LIST CASE 	
 		 else if ((strcasecmp(list,token) == 0) && TransactionState){
 		 	// since in transacationState we know the mailList has been
@@ -247,6 +248,7 @@ void handle_client(int fd) {
 				break;
 			}
 		} else {
+			printf("defaul bad command");
 			if (send_string(fd, "%s", "-ERR command not recognized\r\n") == -1) {
 				return;
 			}
