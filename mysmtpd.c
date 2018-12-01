@@ -120,7 +120,7 @@ void handle_client(int fd) {
 				if (send_string(fd, "221 %s Service closing transmission channel\r\n", unameData.nodename) == -1) {
 					return;
 				}
-				break;
+				return;
 			}
 
 			// handle noop commmand
