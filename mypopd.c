@@ -62,9 +62,7 @@ if (s == NULL){
 
 void handle_client(int fd) {
 	// creates a buffer for receiving a message
-	// net_buffer_t bufferSendPointer = nb_create(fd,512);
 	net_buffer_t bufferReceievePointer = nb_create(fd,512);
-	// lets send hello message to the client 
 
 	const char *welecomeMessage = "+OK POP3 server ready <%s>\r\n";
 	const char *nope = "NOOP";
@@ -75,6 +73,8 @@ void handle_client(int fd) {
 	const char *retr = "RETR";
 	const char *rset = "RSET";
 	const char *pass = "PASS";
+
+	// States 
 	int AuthortativeState = 0;
 	int TransactionState = 0;
 	// intialize this here
@@ -89,11 +89,12 @@ void handle_client(int fd) {
 	char *pw;
 	struct utsname uname_pointer;
   	uname(&uname_pointer);
-	// send initial welcome message
+
+	//  initial welcome message sent
 	if (send_string(fd,welecomeMessage,uname_pointer.nodename) == -1) {
 		return;
 	}
-	// Successfully sent first message
+	// Successfully sent first message now enter AuthortativeState
 	AuthortativeState = 1;
 	char buffer[512];
 
@@ -115,15 +116,12 @@ void handle_client(int fd) {
 		printf("%s\n", token);
 
 		// USER message
-		if ((strcasecmp("USER",token) == 0) && AuthortativeState) {
-			// get 2nd token which should be usernmame
-			// and copy it a new user variable for pass authentication
-			// if it is a valid user 
-			// If invalid user; set user var to NULL  
+		if ((strcasecmp("USER",token) == 0) && AuthortativeState && (strcasecmp(user,"") == 0)) { 
 			tempUser = strtok(NULL, s);
 			char *str = "+OK %s is a valid mailbox\r\n";
 			if (tempUser == NULL) {
 				str = "-ERR Need Username passed as parameter%s\r\n";
+				tempUser = "";
 			} else if (!is_valid_user(tempUser, NULL)) {
 				str = "-ERR never heard of mailbox %s\r\n";
 				strcpy(user,tempUser);
@@ -146,6 +144,7 @@ void handle_client(int fd) {
 				}
 			} else if (!is_valid_user(user, pw)) {
 				Resp = "-ERR incorrect password %s\r\n";
+				memset(user, '\0', sizeof(user));;
 				// reset pw for next iteration
 				if (send_string(fd,Resp,pw) == -1){
 					return;
@@ -270,10 +269,15 @@ int noopResponse(int fd){
 	return 1;
 }
 
+// Handles Quit Response in Auth State
 int quitResponse(int fd, const char* user) {
 	// use a generic message right 
 	// TODO: cal size of msg + max user name size 
-	if (send_string(fd, "+OK %s POP3 server signing off\r\n", user) == -1) {
+	if (strcasecmp(user, "") == 0) {
+		if (send_string(fd, "%s\r\n", "+OK POP3 server signing off") == -1) {
+			return 0;
+		}
+	} else if (send_string(fd, "+OK %s POP3 server signing off\r\n", user) == -1) {
 		return 0;
 	}
 	return 1; 
