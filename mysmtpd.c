@@ -207,7 +207,7 @@ void handle_client(int fd) {
 					return;
 				}
 				validCommand = 0;
-				return;
+				continue;
 			}
 
 			// handle DATA command
