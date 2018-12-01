@@ -13,7 +13,6 @@
 static void handle_client(int fd);
 static int handle_helo(int fd, char *buffer, user_list_t rcptList, struct utsname unameData);
 static int handle_mail(int fd, char *previousCommand, char *buffer, char *holder);
-static int handle_rcpt(int fd, char *previousCommand, char *buffer, char *holder, user_list_t rcptList);
 static int handle_data(int fd, char *previousCommand);
 static int write_data(int fd, char *buffer, char *filename, FILE* f, user_list_t rcptList);
 
@@ -160,12 +159,51 @@ void handle_client(int fd) {
 
 			// handle RCPT command
 			if (strcasecmp(rcpt, command) == 0) {
-				validCommand = handle_rcpt(fd, previousCommand, buffer, holder, rcptList);
-				if (validCommand == 2) {
+				const char *to_header = " TO:<";
+				char *to;
+				// previous command must be MAIL or RCPT
+				if ((strcasecmp(mail, previousCommand) != 0) &&
+					(strcasecmp(rcpt, previousCommand) != 0)) {
+					if (send_string(fd, "503 Bad sequence of commands\r\n") == -1) {
+						return;
+					}
 					validCommand = 0;
+					continue;
+				}
+
+				// ' TO:<email>' needs to check if specification is OK
+				to = strchr(buffer, ' ');
+				memcpy(holder, to, 5);
+				holder[5] = '\0';
+
+				// to's header is OK
+				if (strcasecmp(holder, to_header) == 0) {
+					// to's ender is OK
+					if (strcasecmp(strchr(to, '>'), mail_ender) == 0) {
+						// This gets the email without < >
+						int emailLength = strcspn(to, ">") - strcspn(to, "<");
+						char email[emailLength];
+						memcpy(email, &strchr(to, '<')[1], emailLength - 1);
+						email[emailLength - 1] = '\0';
+
+						// check if to's email is in the list
+						if (is_valid_user(email, NULL)) {
+							// store the recipient's email in the list
+							add_user_to_list(&rcptList, email);
+							if (send_string(fd, "250 OK\r\n") == -1) {
+								return;
+							}
+							validCommand = 1;
+							continue;
+						}
+					}
+				}
+				// Other cases, the TO format is no good
+				if (send_string(fd, "555 RCPT TO parameters not recognized or not implemented\r\n") == -1) {
 					return;
 				}
-				continue;
+				validCommand = 0;
+				return;
 			}
 
 			// handle DATA command
@@ -209,17 +247,16 @@ void handle_client(int fd) {
 // 2: some error, needs to exit out.
 int handle_helo(int fd, char *buffer, user_list_t rcptList, struct utsname unameData) {
 	char *greet;
-	// helo command, start of new mail to send
-	// so delete any existing rcpts
-	destroy_user_list(rcptList);
-	rcptList = create_user_list();
-
 	// get the parameter
 	greet = strchr(buffer, ' ');
 	if ((greet[1] != '\r') && (greet[2] != '\n')) {
 		if (send_string(fd, "250-%s greets%s", unameData.nodename, greet) == -1) {
 			return 2;
 		}
+		// successful helo command, start of new mail to send
+		// so delete any existing rcpts
+		destroy_user_list(rcptList);
+		rcptList = create_user_list();
 		return 1;
 	} else {
 		// when there is no parameter i.e. 'helo '
@@ -260,52 +297,6 @@ int handle_mail(int fd, char *previousCommand, char *buffer, char *holder) {
 	}
 	// Other cases, the FROM format is no good
 	if (send_string(fd, "555 MAIL FROM parameters not recognized or not implemented\r\n") == -1) {
-		return 2;
-	}
-	return 0;
-}
-
-// handles RCPT command, returns validCommand
-int handle_rcpt(int fd, char *previousCommand, char *buffer, char *holder, user_list_t rcptList) {
-	const char *to_header = " TO:<";
-	char *to;
-	// previous command must be MAIL or RCPT
-	if ((strcasecmp(mail, previousCommand) != 0) &&
-		(strcasecmp(rcpt, previousCommand) != 0)) {
-		if (send_string(fd, "503 Bad sequence of commands\r\n") == -1) {
-			return 2;
-		}
-		return 0;
-	}
-
-	// ' TO:<email>' needs to check if specification is OK
-	to = strchr(buffer, ' ');
-	memcpy(holder, to, 5);
-	holder[5] = '\0';
-
-	// to's header is OK
-	if (strcasecmp(holder, to_header) == 0) {
-		// to's ender is OK
-		if (strcasecmp(strchr(to, '>'), mail_ender) == 0) {
-			// This gets the email without < >
-			int emailLength = strcspn(to, ">") - strcspn(to, "<");
-			char email[emailLength];
-			memcpy(email, &strchr(to, '<')[1], emailLength - 1);
-			email[emailLength - 1] = '\0';
-
-			// check if to's email is in the list
-			if (is_valid_user(email, NULL)) {
-				// store the recipient's email in the list
-				add_user_to_list(&rcptList, email);
-				if (send_string(fd, "250 OK\r\n") == -1) {
-					return 2;
-				}
-				return 1;
-			}
-		}
-	}
-	// Other cases, the TO format is no good
-	if (send_string(fd, "555 RCPT TO parameters not recognized or not implemented\r\n") == -1) {
 		return 2;
 	}
 	return 0;
