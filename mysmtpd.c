@@ -59,7 +59,7 @@ void handle_client(int fd) {
 	int dataMode = 0;
 	int file;
 	FILE *f = NULL;
-	char filename[] = "data-XXXXXX";
+	char filename[] = "dataXXXXXX";
 
 	net_buffer_t bufferReceievePointer = nb_create(fd, MAX_LINE_LENGTH);
 	char buffer[MAX_LINE_LENGTH];
@@ -176,8 +176,8 @@ void handle_client(int fd) {
 				}
 				validCommand = dataMode;
 				if ((file = mkstemp(filename)) == -1) {
-					printf("Failed to make file\r\n");
-					if (send_string(fd, "451  Requested action aborted: error in processing\r\n") == -1) {
+					printf("Failed to make temp file\r\n");
+					if (send_string(fd, "451 Requested action aborted: error in processing\r\n") == -1) {
 						return;
 					}
 				}
