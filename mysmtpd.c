@@ -11,7 +11,6 @@
 
 #define MAX_LINE_LENGTH 1024
 static void handle_client(int fd);
-
 static int handle_helo(int fd, char *buffer, user_list_t rcptList, struct utsname unameData);
 static int handle_mail(int fd, char *previousCommand, char *buffer, char *holder);
 static int handle_rcpt(int fd, char *previousCommand, char *buffer, char *holder, user_list_t rcptList);
@@ -204,7 +203,10 @@ void handle_client(int fd) {
 	}
 }
 
-// handles helo command, returns int validCommand
+// handles HELO command, returns int validCommand
+// 0: not valid
+// 1: valid
+// 2: some error, needs to exit out.
 int handle_helo(int fd, char *buffer, user_list_t rcptList, struct utsname unameData) {
 	char *greet;
 	// helo command, start of new mail to send
@@ -228,7 +230,7 @@ int handle_helo(int fd, char *buffer, user_list_t rcptList, struct utsname uname
 	}
 }
 
-// handles mail command, returns validCommand
+// handles MAIL command, returns validCommand
 int handle_mail(int fd, char *previousCommand, char *buffer, char *holder) {
 	char *from;
 	const char *from_header = " FROM:<";
@@ -263,6 +265,7 @@ int handle_mail(int fd, char *previousCommand, char *buffer, char *holder) {
 	return 0;
 }
 
+// handles RCPT command, returns validCommand
 int handle_rcpt(int fd, char *previousCommand, char *buffer, char *holder, user_list_t rcptList) {
 	const char *to_header = " TO:<";
 	char *to;
@@ -299,11 +302,6 @@ int handle_rcpt(int fd, char *previousCommand, char *buffer, char *holder, user_
 				}
 				return 1;
 			}
-			// not a valid user
-			if (send_string(fd, "555 RCPT TO parameters not recognized or not implemented\r\n") == -1) {
-				return 2;
-			}
-			return 0;
 		}
 	}
 	// Other cases, the TO format is no good
@@ -313,7 +311,7 @@ int handle_rcpt(int fd, char *previousCommand, char *buffer, char *holder, user_
 	return 0;
 }
 
-// returns validCommand/dataMode
+// handles DATA command, returns validCommand/dataMode
 // 0: not valid/not going to data
 // 1: valid -> data mode
 // 2: some error so abort
@@ -331,8 +329,10 @@ int handle_data(int fd, char *previousCommand) {
 	return 1;
 }
 
-// returns dataMode
-// if 0: end of data, 1: still saving data, 2: error when sending string
+// Writes the data, returns dataMode
+// if 0: end of data
+// 1: still saving data
+// 2: error when sending string
 int write_data(int fd, char *buffer, char *filename, FILE* f, user_list_t rcptList) {
 	if (strcasecmp(".\r\n", buffer) == 0) {
 		// save the mail to each rcpt
