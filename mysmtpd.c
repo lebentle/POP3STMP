@@ -11,7 +11,7 @@
 
 #define MAX_LINE_LENGTH 1024
 static void handle_client(int fd);
-static int handle_helo(int fd, char *buffer, user_list_t rcptList, struct utsname unameData);
+static int handle_helo(int fd, char *buffer, struct utsname unameData);
 static int handle_mail(int fd, char *previousCommand, char *buffer, char *holder);
 static int handle_data(int fd, char *previousCommand);
 static int write_data(int fd, char *buffer, char *filename, FILE* f, user_list_t rcptList);
@@ -140,7 +140,7 @@ void handle_client(int fd) {
 
 			// handle HELO command
 			if (strcasecmp(helo, command) == 0) {
-				validCommand = handle_helo(fd, buffer, rcptList, unameData);
+				validCommand = handle_helo(fd, buffer, unameData);
 				if (validCommand == 2) {
 					validCommand = 0;
 					return;
@@ -152,8 +152,13 @@ void handle_client(int fd) {
 			if (strcasecmp(mail, command) == 0) {
 				validCommand = handle_mail(fd, previousCommand, buffer, holder);
 				if (validCommand == 2) {
-					validCommand = 0;
 					return;
+				}
+				if (validCommand == 1) {
+					// successful mail command, start of new mail to send
+					// so delete any existing rcpts
+					destroy_user_list(rcptList);
+					rcptList = create_user_list();
 				}
 				continue;
 			}
@@ -244,7 +249,7 @@ void handle_client(int fd) {
 // 0: not valid
 // 1: valid
 // 2: some error, needs to exit out.
-int handle_helo(int fd, char *buffer, user_list_t rcptList, struct utsname unameData) {
+int handle_helo(int fd, char *buffer, struct utsname unameData) {
 	char *greet;
 	// get the parameter
 	greet = strchr(buffer, ' ');
@@ -252,10 +257,6 @@ int handle_helo(int fd, char *buffer, user_list_t rcptList, struct utsname uname
 		if (send_string(fd, "250-%s greets%s", unameData.nodename, greet) == -1) {
 			return 2;
 		}
-		// successful helo command, start of new mail to send
-		// so delete any existing rcpts
-		destroy_user_list(rcptList);
-		rcptList = create_user_list();
 		return 1;
 	} else {
 		// when there is no parameter i.e. 'helo '
