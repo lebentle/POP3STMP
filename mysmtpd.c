@@ -51,7 +51,8 @@ void handle_client(int fd) {
 
 	const char *noParams[4] = {"HELO", "MAIL", "RCPT"};
 	const char *notImplemented[5] = {"EHLO", "RSET", "VRFY", "EXPN", "HELP"};
-
+	const char *to_header = " TO:<";
+	char *to;
 	user_list_t rcptList = create_user_list();
 
 	// this is a bit that tracks if data is being written
@@ -159,8 +160,6 @@ void handle_client(int fd) {
 
 			// handle RCPT command
 			if (strcasecmp(rcpt, command) == 0) {
-				const char *to_header = " TO:<";
-				char *to;
 				// previous command must be MAIL or RCPT
 				if ((strcasecmp(mail, previousCommand) != 0) &&
 					(strcasecmp(rcpt, previousCommand) != 0)) {
