@@ -1,6 +1,4 @@
 blauren password123
-Elvis@netapp.com password1
-Tim@netapp.com password2
-Will@netapp.com password3
-Willz@netapp.com password4 
-Willh@netapp.com password5
+alvis pass
+bob 123
+joey 7898

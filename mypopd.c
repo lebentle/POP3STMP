@@ -21,6 +21,7 @@ static int handleDelete(int fd, char * itemToDele, mail_list_t list);
 static int handleReturn(int fd, char * itemToReturn,char *userName, mail_list_t list);
 static int openAndReadFile(int fd, const char * mailName, const char * username, size_t size);
 static int handleQuitTrans(int fd, const char* user, int listsize,mail_list_t list);
+static int assertIsNum(const char* digit);
 // Things to consider further down the line
 // what to send if send_string returns -1 
 // Case where no user provided or pw: Can I just rid of the crlf? 
@@ -51,7 +52,6 @@ int main(int argc, char *argv[]) {
 
 void print_hex(const char *s) {
 if (s == NULL){
-	printf("str is empty, return\n");
 	return;
 }
   while(*s) {
@@ -62,7 +62,7 @@ if (s == NULL){
 
 void handle_client(int fd) {
 	// creates a buffer for receiving a message
-	net_buffer_t bufferReceievePointer = nb_create(fd,512);
+	net_buffer_t bufferReceievePointer = nb_create(fd,1024);
 
 	const char *welecomeMessage = "+OK POP3 server ready <%s>\r\n";
 	const char *nope = "NOOP";
@@ -96,16 +96,21 @@ void handle_client(int fd) {
 	}
 	// Successfully sent first message now enter AuthortativeState
 	AuthortativeState = 1;
-	char buffer[512];
+	char buffer[MAX_LINE_LENGTH + 2];
 
 	// now wait for a response 
 	while (1) {
 		if (nb_read_line(bufferReceievePointer,buffer) == -1) {
 			return;
 		}
-		printf("print the current buffer\n");
-		printf("%s",buffer);
-
+		// check if line is long; 
+		// if line is length of 1025 then we need to 
+		// break 
+		if (strlen(buffer) > 1024) {
+			if (send_string(fd, "%s","-ERR command was too long") == -1){
+				return;
+			}
+		}
 		// check to see if space in buffer 
 		char *token;
 		const char s[2] = " ";
@@ -113,7 +118,6 @@ void handle_client(int fd) {
 		// Sending out an email; use as a placeholder for now
 		buffer[strcspn(buffer, "\r\n")] = '\0';
 		token = strtok(buffer,s);
-		printf("%s\n", token);
 
 		// USER message
 		if ((strcasecmp("USER",token) == 0) && AuthortativeState && (strcasecmp(user,"") == 0)) { 
@@ -124,7 +128,6 @@ void handle_client(int fd) {
 				tempUser = "";
 			} else if (!is_valid_user(tempUser, NULL)) {
 				str = "-ERR never heard of mailbox %s\r\n";
-				strcpy(user,tempUser);
 			} else {
 				strcpy(user,tempUser);
 			}
@@ -137,9 +140,13 @@ void handle_client(int fd) {
 			pw = strtok(NULL, s);
 			if (strcasecmp(user,"") == 0) {
 				Resp = "-ERR No USER provided before PASS command\r\n";
+				if (send_string(fd, "%s",Resp) == -1){
+					return;
+				}
 			} else if (!pw) {
 				Resp = "-ERR Need password passed as a parameter\r\n";
-				if (send_string(fd,"%s",Resp)){
+				memset(user, '\0', sizeof(user));;
+				if (send_string(fd,"%s",Resp) == -1){
 					return;
 				}
 			} else if (!is_valid_user(user, pw)) {
@@ -190,6 +197,19 @@ void handle_client(int fd) {
 					return;
 				}
 			} else {
+				if (!(assertIsNum(listArg))){
+					 if (send_string(fd, "%s", "-ERR arugment provided with LIST is not valid\r\n") == -1) {
+					 	return;
+					 }
+				continue;
+				}
+			int num = atoi(listArg);
+			if (num <= 0){
+				if (send_string(fd, "%s", "-ERR arugment provided with LIST is not valid\r\n") == -1) {
+					 return;
+					}
+				continue;
+				}
 			// Also, need to consider the delete case
 			mail_item_t mailItem = get_mail_item(mailList,atoi(listArg) - 1);
 			if (mailItem) {
@@ -221,7 +241,6 @@ void handle_client(int fd) {
 	 			return;
 	 		} else {
 	 			destroy_mail_list(mailList);
-	 			printf("close connection\n");
 	 			return;
 	 		}
 	 	// RSET CASE
@@ -230,7 +249,7 @@ void handle_client(int fd) {
 	 		if (argRSET != NULL) {
 				if (send_string(fd,"+ERR No arguments should be given with RSET\r\n")){
 					return;
-				}
+				} 
 			} else {
 				reset_mail_list_deleted_flag(mailList);
 				int mailListCount = get_mail_count(mailList);
@@ -243,26 +262,21 @@ void handle_client(int fd) {
 			noopResponse(fd);
 		} else if (!strcasecmp(quit, buffer) && AuthortativeState) {
 			if (quitResponse(fd, user)) {
-				printf("Closing the connection");
 				break;
 			}
 		} else {
-			printf("defaul bad command");
-			if (send_string(fd, "%s", "-ERR command not recognized\r\n") == -1) {
+			if (send_string(fd, "%s", "-ERR command not accepted\r\n") == -1) {
 				return;
 			}
 		}
-		printf("now entering another iteration of a loop\n");
 		memset(buffer, 0, sizeof(buffer));
 	}
-	printf("about to return\n");
 	return;
 }
 
 
 // NOOP command functionality
 int noopResponse(int fd){
-	printf("I am entering is nope function\n");
 	if (send_string(fd, "+OK\r\n") == -1) {
 		return 0;
 	}
@@ -319,9 +333,20 @@ int handleDelete(int fd, char * itemToDele, mail_list_t list){
 	    	return 0;
 	    }
 	} else {
+		if (!assertIsNum(itemToDele)){
+		 if (send_string(fd, "%s", "-ERR arugment provided with DELE is not valid\r\n") == -1) {
+	    	return 0;
+	    }
+	    return 1; 
+	    }
 		itemDELNUM = strtoul(itemToDele, NULL,10);
-		if (itemDELNUM == 0) {
-			Resp = "-ERR %zu is not a valid input deleted\r\n";
+		// Will never see negative case here 
+		// as it will be caught by the assertIsNum fucntion 
+		if (itemDELNUM <= 0) {
+			if (send_string(fd, "-ERR %u is not a valid input\r\n", itemDELNUM) == -1){
+				return 0;
+			}
+			return 1;
 		}
 		mail_item_t itemDel = get_mail_item(list,itemDELNUM - 1);
 		if (!itemDel){
@@ -337,21 +362,30 @@ int handleDelete(int fd, char * itemToDele, mail_list_t list){
 	return 1;
 }
 
+
+// Handles Return case
 int handleReturn(int fd, char *itemToReturn, char *userName, mail_list_t list) {
 	const char * Resp;
-	unsigned int itemRERN;
 	if (!itemToReturn){
-	    if (send_string(fd, "%s", "-ERR no arugment provided with RETN\r\n") == -1) {
+	    if (send_string(fd, "%s", "-ERR no arugment provided with RETR\r\n") == -1) {
 	    	return 0;
 	    }
 	} else {
-		itemRERN = strtoul(itemToReturn, NULL,10);
-		printf("%u\n",itemRERN);
-		if (itemRERN == 0) {
-			Resp = "-ERR no such message\r\n";
+		if (!assertIsNum(itemToReturn)){
+		 if (send_string(fd, "%s", "-ERR arugment provided with RETR is not valid\r\n") == -1) {
+	    	return 0;
+	    }
+	    return 1; 
+	   }
+	   int itemRERN = atoi(itemToReturn);
+	   // NOTE: it will never be less than 0 because the assertisNum function
+	   // would classify it as a string 
+	   if (itemRERN <= 0) {
+	   	    Resp = "-ERR arugment provided with RETR is an invalid number\r\n";
 			if (send_string(fd, "%s",Resp) == -1){
 				return 0;
 			}
+			return 1;
 		}
 		mail_item_t itemToReturned = get_mail_item(list,itemRERN - 1);
 		if (!itemToReturned){
@@ -379,25 +413,61 @@ int sendTerminator(int fd){
 	return 1;
 }
 
+int assertIsNum(const char* digit){
+	for (int i = 0; i <strlen(digit); i++){
+		if (!isdigit(digit[i])){
+			return 0;
+		} 
+	}
+	return 1; 
+}
 
+// Open and reads a file
 int openAndReadFile(int fd, const char * mailName, const char * username, size_t size) {
 	char filename[NAME_MAX + 1];
   	sprintf(filename, "%s", mailName);
-  	printf("%s\n",filename);
 	FILE *file = fopen(filename,"r+");
 	if (!file) {
-		return 0;
-	}
+		if (send_string(fd, "%s","-ERR opening file\r\n") == -1){
+			return 0;
+		}
+		return 1;
+	} 
 	char buf[1024];
 	size_t nread;
 	memset(buf, '\0', sizeof(buf));
-	// read intho the buff 
+	size_t totalbytesRead = 0;
+	// obtain file size to check for errors 
+	fseek (file , 0 , SEEK_END);
+    long lSize = ftell (file);
+ 	rewind (file);
+	// read intho the buff
 	while ((nread = fread(buf, 1, sizeof buf, file)) > 0){
+		totalbytesRead = totalbytesRead + nread;
 		if (send_all(fd, buf,nread) == -1) {
 			return 0;
 		}
 		memset(buf, '\0', sizeof(buf));
 	}
+	// Send Error if lSize does not equal total bytes read
+	// Only return 0; if connection broken between server and client 
+	// I found the specifications about this a little unclear; 
+	// as we have a
+	// size as indicated by our get_mail_item_size I am not
+	// sure if I should check for that case 
+	if (totalbytesRead != lSize){	
+		if (send_string(fd, "%s","-ERR reading file\r\n") == -1){
+			return 0;
+		}
+		return 1;
+	}
+	/*
+	if (totalbytesRead != size){	
+		if (send_string(fd, "%s","-ERR reading file\r\n") == -1){
+			return 0;
+		}
+		return 1;
+	}*/
 	// termiante here 
 	if (send_string(fd, "%s","\r\n") == -1){
 		return 0;
@@ -405,9 +475,9 @@ int openAndReadFile(int fd, const char * mailName, const char * username, size_t
 	if (!sendTerminator(fd)){
 		return 0;
 	}
-	if (fclose(file)) {
-		return 0;
-	}
+	// Linux will handle the file if doesn'y close correctly 
+	// eitherway 
+	fclose(file);
 	return 1;
 }
  
