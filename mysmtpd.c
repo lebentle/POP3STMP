@@ -12,6 +12,20 @@
 #define MAX_LINE_LENGTH 1024
 static void handle_client(int fd);
 
+static int handle_helo(int fd, char *buffer, user_list_t rcptList, struct utsname unameData);
+static int handle_mail(int fd, char *previousCommand, char *buffer, char *holder);
+static int handle_rcpt(int fd, char *previousCommand, char *buffer, char *holder, user_list_t rcptList);
+static int handle_data(int fd, char *previousCommand);
+static int write_data(int fd, char *buffer, char *filename, FILE* f, user_list_t rcptList);
+
+const char *noop = "NOOP";
+const char *quit = "QUIT";
+const char *helo = "HELO ";
+const char *mail = "MAIL ";
+const char *rcpt = "RCPT ";
+const char *data = "DATA";
+const char *mail_ender = ">\r\n";
+
 int main(int argc, char *argv[]) {
   
   if (argc != 2) {
@@ -29,19 +43,6 @@ void handle_client(int fd) {
 	struct utsname unameData;
 	uname(&unameData);
 
-	const char *noop = "NOOP";
-	const char *quit = "QUIT";
-	const char *helo = "HELO ";
-	const char *mail = "MAIL ";
-	const char *rcpt = "RCPT ";
-	const char *data = "DATA";
-	const char *from_header = " FROM:<";
-	const char *to_header = " TO:<";
-	const char *mail_ender = ">\r\n";
-
-	char *greet;
-	char *to;
-	char *from;
 	char command[6];
 
 	// this is a bit that tracks whether the last command was valid
@@ -55,7 +56,6 @@ void handle_client(int fd) {
 
 	user_list_t rcptList = create_user_list();
 
-
 	// this is a bit that tracks if data is being written
 	// 0-not writing, 1-data being written
 	int dataMode = 0;
@@ -63,28 +63,25 @@ void handle_client(int fd) {
 	FILE *f = NULL;
 	char filename[] = "data-XXXXXX";
 
-	const char *welcomeMessage = "Simple Mail Transfer Service Ready\r\n";
-	const char *closeMessage = "Service closing transmission channel\r\n";
-
 	net_buffer_t bufferReceievePointer = nb_create(fd, MAX_LINE_LENGTH);
 	char buffer[MAX_LINE_LENGTH];
 	// send initial welcome message
-	if (send_string(fd,"220 %s %s", unameData.nodename, welcomeMessage) == -1) {
-		printf("Hit an Error.");
+	if (send_string(fd,"220 %s\r\n", unameData.nodename) == -1) {
+		return;
 	}
 	wLoop: while(1) {
+		// read client input
 		int lineLength = nb_read_line(bufferReceievePointer,buffer);
 		if (lineLength == -1) {
-			printf("Hit an Error. TODO. Quit?");
 			return;
 		}
 		if (strcspn(buffer, "\r\n") == MAX_LINE_LENGTH) {
 			validCommand = 0;
-			send_string(fd, "500 Line too long.\r\n");
+			if (send_string(fd, "500 Line too long.\r\n") == -1) {
+				return;
+			}
 			continue;
 		}
-
-		printf("%s",buffer);
 
 		if (dataMode == 0) {
 			// save the previous command if it was valid
@@ -100,13 +97,17 @@ void handle_client(int fd) {
 			for (int i = 0; i<5; i++) {
 				if (strcasecmp(notImplemented[i],command) == 0) {
 					validCommand = 0;
-					send_string(fd, "502 Command not implemented\r\n");
+					if (send_string(fd, "502 Command not implemented\r\n") == -1) {
+						return;
+					}
 					goto wLoop;
 				}
 				if (i < 3) {
 					if (strcasecmp(noParams[i], command) == 0) {
 						validCommand = 0;
-						send_string(fd, "504 Command parameters not implemented\r\n");
+						if (send_string(fd, "504 Command parameters not implemented\r\n") == -1) {
+							return;
+						}
 						goto wLoop;
 					}
 				}
@@ -114,7 +115,12 @@ void handle_client(int fd) {
 
 			// handle quit command
 			if (strcasecmp(quit, command) == 0) {
-				send_string(fd, "221 %s %s", unameData.nodename, closeMessage);
+				// Set validCommand to 1 so that when opening a new connection
+				// the previousCommand is overwritten
+				validCommand = 1;
+				if (send_string(fd, "221 %s Service closing transmission channel\r\n", unameData.nodename) == -1) {
+					return;
+				}
 				break;
 			}
 
@@ -123,7 +129,9 @@ void handle_client(int fd) {
 				// since noops do not interfere with the chain of commands
 				// we will treat it as an invalid command
 				validCommand = 0;
-				send_string(fd, "250 OK\r\n");
+				if (send_string(fd, "250 OK\r\n") == -1) {
+					return;
+				}
 				continue;
 			}
 
@@ -133,135 +141,212 @@ void handle_client(int fd) {
 
 			// handle HELO command
 			if (strcasecmp(helo, command) == 0) {
-				// helo command, start of new mail to send
-				// so delete any existing rcpts
-				destroy_user_list(rcptList);
-				rcptList = create_user_list();
-
-				// get the parameter
-				greet = strchr(buffer, ' ');
-				if ((greet[1] != '\r') && (greet[2] != '\n')) {
-					validCommand = 1;
-					send_string(fd, "250-%s greets%s", unameData.nodename, greet);
-					continue;
-				} else {
+				validCommand = handle_helo(fd, buffer, rcptList, unameData);
+				if (validCommand == 2) {
 					validCommand = 0;
-					// when there is no parameter i.e. 'helo '
-					send_string(fd, "504 Command parameter not implemented\r\n");
-					continue;
+					return;
 				}
+				continue;
 			}
 
 			// handle MAIL command
 			if (strcasecmp(mail, command) == 0) {
-				// previous command must be HELO or DATA
-				if ((strcasecmp(helo, previousCommand) != 0) &&
-					(strcasecmp(data, previousCommand) != 0)) {
+				validCommand = handle_mail(fd, previousCommand, buffer, holder);
+				if (validCommand == 2) {
 					validCommand = 0;
-					send_string(fd, "503 Bad sequence of commands\r\n");
-					continue;
+					return;
 				}
-
-				// ' FROM:<email>' needs to check if specification is OK
-				from = strchr(buffer, ' ');
-				memcpy(holder, from, 7);
-				holder[7] = '\0';
-
-				// from's header is OK
-				if (strcasecmp(holder, from_header) == 0) {
-					// from's ender is OK
-					if (strcasecmp(strchr(from, '>'), mail_ender) == 0) {
-						validCommand = 1;
-						send_string(fd, "250 OK\r\n");
-						continue;
-					}
-				}
-				validCommand = 0;
-				// Other cases, the FROM format is no good
-				send_string(fd, "555 MAIL FROM parameters not recognized or not implemented\r\n");
 				continue;
 			}
 
 			// handle RCPT command
 			if (strcasecmp(rcpt, command) == 0) {
-				// previous command must be MAIL or RCPT
-				if ((strcasecmp(mail, previousCommand) != 0) &&
-					(strcasecmp(rcpt, previousCommand) != 0)) {
+				validCommand = handle_rcpt(fd, previousCommand, buffer, holder, rcptList);
+				if (validCommand == 2) {
 					validCommand = 0;
-					send_string(fd, "503 Bad sequence of commands\r\n");
-					continue;
+					return;
 				}
-
-				// ' TO:<email>' needs to check if specification is OK
-				to = strchr(buffer, ' ');
-				memcpy(holder, to, 5);
-				holder[5] = '\0';
-
-				// to's header is OK
-				if (strcasecmp(holder, to_header) == 0) {
-					// to's ender is OK
-					if (strcasecmp(strchr(to, '>'), mail_ender) == 0) {
-						// This gets the email without < >
-						int emailLength = strcspn(to, ">") - strcspn(to, "<");
-						char email[emailLength];
-						memcpy(email, &strchr(to, '<')[1], emailLength - 1);
-						email[emailLength - 1] = '\0';
-
-						// check if to's email is in the list
-						if (is_valid_user(email, NULL)) {
-							// store the recipient's email in the list
-							add_user_to_list(&rcptList, email);
-							validCommand = 1;
-							send_string(fd, "250 OK\r\n");
-							continue;
-						}
-						validCommand = 0;
-						// not a valid user
-						send_string(fd, "555 RCPT TO parameters not recognized or not implemented\r\n");
-						continue;
-					}
-				}
-				validCommand = 0;
-				// Other cases, the TO format is no good
-				send_string(fd, "555 RCPT TO parameters not recognized or not implemented\r\n");
 				continue;
 			}
 
 			// handle DATA command
 			if (strcasecmp(data, command) == 0) {
-				// previous command must be RCPT
-				if (strcasecmp(rcpt, previousCommand) != 0) {
+				dataMode = handle_data(fd, previousCommand);
+				if (dataMode == 2) {
+					dataMode = 0;
 					validCommand = 0;
-					send_string(fd, "503 Bad sequence of commands\r\n");
-					continue;
+					return;
 				}
-				dataMode = 1;
-				validCommand = 1;
-				send_string(fd, "354 Start mail input; end with <CRLF>.<CRLF>\r\n");
+				validCommand = dataMode;
 				if ((file = mkstemp(filename)) == -1) {
 					printf("Failed to make file\r\n");
+					if (send_string(fd, "451  Requested action aborted: error in processing\r\n") == -1) {
+						return;
+					}
 				}
 				f = fdopen(file, "w");
 				continue;
 			}
 			validCommand = 0;
 			// Random input received, reject with 500
-			send_string(fd, "500 Command not recognized\r\n");
-		}
-		if (dataMode) {
-			if (strcasecmp(".\r\n", buffer) == 0) {
-				dataMode = 0;
-				// save the mail to each rcpt
-				save_user_mail(filename, rcptList);
-
-				// destroy temp file
-				fclose(f);
-				unlink(filename);
-				send_string(fd, "250 OK\r\n");
-				continue;
+			if (send_string(fd, "500 Command not recognized\r\n") == -1) {
+				return;
 			}
-			// save the data in a temp file
-			fprintf(f, "%s", buffer);
+		}
+		// write data
+		if (dataMode) {
+			dataMode = write_data(fd, buffer, filename, f, rcptList);
+			if (dataMode == 2) {
+				dataMode = 0;
+				return;
+			}
 		}
 	}
+}
+
+// handles helo command, returns int validCommand
+int handle_helo(int fd, char *buffer, user_list_t rcptList, struct utsname unameData) {
+	char *greet;
+	// helo command, start of new mail to send
+	// so delete any existing rcpts
+	destroy_user_list(rcptList);
+	rcptList = create_user_list();
+
+	// get the parameter
+	greet = strchr(buffer, ' ');
+	if ((greet[1] != '\r') && (greet[2] != '\n')) {
+		if (send_string(fd, "250-%s greets%s", unameData.nodename, greet) == -1) {
+			return 2;
+		}
+		return 1;
+	} else {
+		// when there is no parameter i.e. 'helo '
+		if (send_string(fd, "504 Command parameter not implemented\r\n") == -1) {
+			return 2;
+		}
+		return 0;
+	}
+}
+
+// handles mail command, returns validCommand
+int handle_mail(int fd, char *previousCommand, char *buffer, char *holder) {
+	char *from;
+	const char *from_header = " FROM:<";
+	// previous command must be HELO or DATA
+	if ((strcasecmp(helo, previousCommand) != 0) &&
+		(strcasecmp(data, previousCommand) != 0)) {
+		if (send_string(fd, "503 Bad sequence of commands\r\n") == -1) {
+			return 2;
+		}
+		return 0;
+	}
+
+	// ' FROM:<email>' needs to check if specification is OK
+	from = strchr(buffer, ' ');
+	memcpy(holder, from, 7);
+	holder[7] = '\0';
+
+	// from's header is OK
+	if (strcasecmp(holder, from_header) == 0) {
+		// from's ender is OK
+		if (strcasecmp(strchr(from, '>'), mail_ender) == 0) {
+			if (send_string(fd, "250 OK\r\n") == -1) {
+				return 2;
+			}
+			return 1;
+		}
+	}
+	// Other cases, the FROM format is no good
+	if (send_string(fd, "555 MAIL FROM parameters not recognized or not implemented\r\n") == -1) {
+		return 2;
+	}
+	return 0;
+}
+
+int handle_rcpt(int fd, char *previousCommand, char *buffer, char *holder, user_list_t rcptList) {
+	const char *to_header = " TO:<";
+	char *to;
+	// previous command must be MAIL or RCPT
+	if ((strcasecmp(mail, previousCommand) != 0) &&
+		(strcasecmp(rcpt, previousCommand) != 0)) {
+		if (send_string(fd, "503 Bad sequence of commands\r\n") == -1) {
+			return 2;
+		}
+		return 0;
+	}
+
+	// ' TO:<email>' needs to check if specification is OK
+	to = strchr(buffer, ' ');
+	memcpy(holder, to, 5);
+	holder[5] = '\0';
+
+	// to's header is OK
+	if (strcasecmp(holder, to_header) == 0) {
+		// to's ender is OK
+		if (strcasecmp(strchr(to, '>'), mail_ender) == 0) {
+			// This gets the email without < >
+			int emailLength = strcspn(to, ">") - strcspn(to, "<");
+			char email[emailLength];
+			memcpy(email, &strchr(to, '<')[1], emailLength - 1);
+			email[emailLength - 1] = '\0';
+
+			// check if to's email is in the list
+			if (is_valid_user(email, NULL)) {
+				// store the recipient's email in the list
+				add_user_to_list(&rcptList, email);
+				if (send_string(fd, "250 OK\r\n") == -1) {
+					return 2;
+				}
+				return 1;
+			}
+			// not a valid user
+			if (send_string(fd, "555 RCPT TO parameters not recognized or not implemented\r\n") == -1) {
+				return 2;
+			}
+			return 0;
+		}
+	}
+	// Other cases, the TO format is no good
+	if (send_string(fd, "555 RCPT TO parameters not recognized or not implemented\r\n") == -1) {
+		return 2;
+	}
+	return 0;
+}
+
+// returns validCommand/dataMode
+// 0: not valid/not going to data
+// 1: valid -> data mode
+// 2: some error so abort
+int handle_data(int fd, char *previousCommand) {
+	// previous command must be RCPT
+	if (strcasecmp(rcpt, previousCommand) != 0) {
+		if (send_string(fd, "503 Bad sequence of commands\r\n") == -1) {
+			return 2;
+		}
+		return 0;
+	}
+	if (send_string(fd, "354 Start mail input; end with <CRLF>.<CRLF>\r\n") == -1) {
+		return 2;
+	}
+	return 1;
+}
+
+// returns dataMode
+// if 0: end of data, 1: still saving data, 2: error when sending string
+int write_data(int fd, char *buffer, char *filename, FILE* f, user_list_t rcptList) {
+	if (strcasecmp(".\r\n", buffer) == 0) {
+		// save the mail to each rcpt
+		save_user_mail(filename, rcptList);
+
+		// destroy temp file
+		fclose(f);
+		unlink(filename);
+		if (send_string(fd, "250 OK\r\n") == -1) {
+			return 2;
+		}
+		return 0;
+	}
+	// save the data in a temp file
+	fprintf(f, "%s", buffer);
+	return 1;
 }
