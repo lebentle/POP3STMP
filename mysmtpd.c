@@ -59,7 +59,8 @@ void handle_client(int fd) {
 	int dataMode = 0;
 	int file;
 	FILE *f = NULL;
-	char filename[] = "dataXXXXXX";
+	char fn[] = "dataXXXXXX";
+	char filename[11];
 
 	net_buffer_t bufferReceievePointer = nb_create(fd, MAX_LINE_LENGTH);
 	char buffer[MAX_LINE_LENGTH];
@@ -170,6 +171,7 @@ void handle_client(int fd) {
 
 			// handle DATA command
 			if (strcasecmp(data, command) == 0) {
+				memcpy(filename, fn, 11);
 				dataMode = handle_data(fd, previousCommand);
 				if (dataMode == 2) {
 					return;
