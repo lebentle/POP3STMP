@@ -26,10 +26,9 @@ int main(int argc, char *argv[]) {
 
 
 void handle_client(int fd) {
-	// TODO
 	struct utsname unameData;
-
 	uname(&unameData);
+
 	const char *noop = "NOOP";
 	const char *quit = "QUIT";
 	const char *helo = "HELO ";
@@ -39,17 +38,26 @@ void handle_client(int fd) {
 	const char *from_header = " FROM:<";
 	const char *to_header = " TO:<";
 	const char *mail_ender = ">\r\n";
+
 	char *greet;
 	char *to;
 	char *from;
 	char command[6];
+
+	// this is a bit that tracks whether the last command was valid
+	int validCommand = 0;
+	// holds the last valid command
 	char previousCommand[6];
 	char holder[8];
+
 	const char *noParams[4] = {"HELO", "MAIL", "RCPT"};
 	const char *notImplemented[5] = {"EHLO", "RSET", "VRFY", "EXPN", "HELP"};
 
 	user_list_t rcptList = create_user_list();
 
+
+	// this is a bit that tracks if data is being written
+	// 0-not writing, 1-data being written
 	int dataMode = 0;
 	int file;
 	FILE *f = NULL;
@@ -71,6 +79,7 @@ void handle_client(int fd) {
 			return;
 		}
 		if (strcspn(buffer, "\r\n") == MAX_LINE_LENGTH) {
+			validCommand = 0;
 			send_string(fd, "500 Line too long.\r\n");
 			continue;
 		}
@@ -78,8 +87,11 @@ void handle_client(int fd) {
 		printf("%s",buffer);
 
 		if (dataMode == 0) {
+			// save the previous command if it was valid
+			if (validCommand) {
+				memcpy(previousCommand, &command, 6);
+			}
 			// get the first 5 characters to compare
-			memcpy(previousCommand, &command, 6);
 			memcpy(command, &buffer, 6);
 			if (command[4] == '\r' && command[5] == '\n') {
 				command[4] = '\0';
@@ -87,11 +99,13 @@ void handle_client(int fd) {
 
 			for (int i = 0; i<5; i++) {
 				if (strcasecmp(notImplemented[i],command) == 0) {
+					validCommand = 0;
 					send_string(fd, "502 Command not implemented\r\n");
 					goto wLoop;
 				}
 				if (i < 3) {
 					if (strcasecmp(noParams[i], command) == 0) {
+						validCommand = 0;
 						send_string(fd, "504 Command parameters not implemented\r\n");
 						goto wLoop;
 					}
@@ -106,6 +120,9 @@ void handle_client(int fd) {
 
 			// handle noop commmand
 			if (strcasecmp(noop, command) == 0) {
+				// since noops do not interfere with the chain of commands
+				// we will treat it as an invalid command
+				validCommand = 0;
 				send_string(fd, "250 OK\r\n");
 				continue;
 			}
@@ -124,9 +141,12 @@ void handle_client(int fd) {
 				// get the parameter
 				greet = strchr(buffer, ' ');
 				if ((greet[1] != '\r') && (greet[2] != '\n')) {
+					validCommand = 1;
 					send_string(fd, "250-%s greets%s", unameData.nodename, greet);
 					continue;
 				} else {
+					validCommand = 0;
+					// when there is no parameter i.e. 'helo '
 					send_string(fd, "504 Command parameter not implemented\r\n");
 					continue;
 				}
@@ -137,6 +157,7 @@ void handle_client(int fd) {
 				// previous command must be HELO or DATA
 				if ((strcasecmp(helo, previousCommand) != 0) &&
 					(strcasecmp(data, previousCommand) != 0)) {
+					validCommand = 0;
 					send_string(fd, "503 Bad sequence of commands\r\n");
 					continue;
 				}
@@ -150,10 +171,12 @@ void handle_client(int fd) {
 				if (strcasecmp(holder, from_header) == 0) {
 					// from's ender is OK
 					if (strcasecmp(strchr(from, '>'), mail_ender) == 0) {
+						validCommand = 1;
 						send_string(fd, "250 OK\r\n");
 						continue;
 					}
 				}
+				validCommand = 0;
 				// Other cases, the FROM format is no good
 				send_string(fd, "555 MAIL FROM parameters not recognized or not implemented\r\n");
 				continue;
@@ -164,6 +187,7 @@ void handle_client(int fd) {
 				// previous command must be MAIL or RCPT
 				if ((strcasecmp(mail, previousCommand) != 0) &&
 					(strcasecmp(rcpt, previousCommand) != 0)) {
+					validCommand = 0;
 					send_string(fd, "503 Bad sequence of commands\r\n");
 					continue;
 				}
@@ -187,14 +211,17 @@ void handle_client(int fd) {
 						if (is_valid_user(email, NULL)) {
 							// store the recipient's email in the list
 							add_user_to_list(&rcptList, email);
-
+							validCommand = 1;
 							send_string(fd, "250 OK\r\n");
 							continue;
 						}
-						send_string(fd, "550 No such user here\r\n");
+						validCommand = 0;
+						// not a valid user
+						send_string(fd, "555 RCPT TO parameters not recognized or not implemented\r\n");
 						continue;
 					}
 				}
+				validCommand = 0;
 				// Other cases, the TO format is no good
 				send_string(fd, "555 RCPT TO parameters not recognized or not implemented\r\n");
 				continue;
@@ -204,10 +231,12 @@ void handle_client(int fd) {
 			if (strcasecmp(data, command) == 0) {
 				// previous command must be RCPT
 				if (strcasecmp(rcpt, previousCommand) != 0) {
+					validCommand = 0;
 					send_string(fd, "503 Bad sequence of commands\r\n");
 					continue;
 				}
 				dataMode = 1;
+				validCommand = 1;
 				send_string(fd, "354 Start mail input; end with <CRLF>.<CRLF>\r\n");
 				if ((file = mkstemp(filename)) == -1) {
 					printf("Failed to make file\r\n");
@@ -215,7 +244,7 @@ void handle_client(int fd) {
 				f = fdopen(file, "w");
 				continue;
 			}
-
+			validCommand = 0;
 			// Random input received, reject with 500
 			send_string(fd, "500 Command not recognized\r\n");
 		}
