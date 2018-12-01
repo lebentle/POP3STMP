@@ -96,17 +96,18 @@ void handle_client(int fd) {
 	}
 	// Successfully sent first message now enter AuthortativeState
 	AuthortativeState = 1;
-	char buffer[MAX_LINE_LENGTH + 2];
+	char buffer[MAX_LINE_LENGTH];
 
 	// now wait for a response 
 	while (1) {
 		if (nb_read_line(bufferReceievePointer,buffer) == -1) {
 			return;
 		}
-		// check if line is long; 
-		// if line is length of 1025 then we need to 
-		// break 
-		if (strlen(buffer) > 1024) {
+		// check if line is too long;
+		// 40 charcters for the username 
+		// 4 charactersrs for the 4 letter command
+		// 1 char for the space 
+		if (strlen(buffer) > 45) {
 			if (send_string(fd, "%s","-ERR command was too long") == -1){
 				return;
 			}
