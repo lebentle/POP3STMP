@@ -1,4 +1,4 @@
-Total before late penalty: [/100]
+Total before late penalty: [100/100]
 
 NOTE: in the marking report something left blank (e.g.  [ /6]) typically means
 that you got full marks for that item. 
@@ -167,3 +167,4 @@ PROGRAM STRUCTURE AND STYLE: [/14]
 
 
 MARKER'S ADDITIONAL COMMENTS:
+- Works well
